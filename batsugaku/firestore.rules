@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // users コレクション
+    match /users/{userId} {
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // studyLogs コレクション（学習ログ）
+    // 原則 Functions からのみ書き込み。クライアントは自分のログを読み取るだけ。
+    match /studyLogs/{logId} {
+      allow read: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow write: if false; // 書き込みは Firebase Admin SDK（サービスアカウント）経由のみ
+    }
+
+    // badges コレクション（バッジ）
+    // こちらも Functions が発行・更新し、クライアントは自分のバッジのみ読み取り。
+    match /badges/{badgeId} {
+      allow read: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+  }
+}
+
+
