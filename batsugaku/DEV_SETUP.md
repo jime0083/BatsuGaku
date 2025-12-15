@@ -79,6 +79,12 @@ React Native アプリ自体はネイティブで動作しますが、JavaScript
    pod install
    ```
 
+2. 実機インストール用ツール `ios-deploy` をインストール（React Native CLI から実機へ入れる場合に必要）:
+
+   ```bash
+   brew install ios-deploy
+   ```
+
 2. `*.xcworkspace` を Xcode で開く:
    - Finder で `ios/` フォルダを開き、`Batsugaku.xcworkspace`（仮）をダブルクリック。
 
@@ -139,6 +145,10 @@ npx react-native start
 
 # （iOS シミュレータでの起動例）
 npx react-native run-ios
+
+# （iPhone 実機へインストールする例）
+# 先に Metro を起動してから実行するのがおすすめ
+npx react-native run-ios --device --no-packager
 ```
 
 これらにより、Chrome での JavaScript デバッグと Xcode + iPhone 実機テストの両方を行える環境が整います。
