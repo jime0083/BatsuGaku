@@ -67,6 +67,36 @@ React Native アプリ自体はネイティブで動作しますが、JavaScript
 
 ---
 
+### 3.5 Mac なしで動作確認できる形にする（Release ビルド）
+
+結論として、**`npx react-native start` が必要なのは Debug ビルドのときだけ**です。  
+Debug は JavaScript を Mac の Metro から読み込むため、iPhone が Mac に繋がっていないと動きません。
+
+一方で **Release ビルド**は JavaScript（`main.jsbundle`）と画像等の asset を **アプリ内に同梱**するため、
+一度 iPhone にインストールできれば **Mac なしでどこでも起動・動作確認**できます。
+
+#### 手順（Xcode で Release 実行）
+
+1. Xcode で `BatsuGakuNative.xcworkspace` を開く
+2. 上部メニュー: `Product` → `Scheme` → `Edit Scheme...`
+3. 左の `Run` を選び、`Build Configuration` を **Release** に変更
+4. iPhone 実機を選択して ▶ Run
+
+この状態で入ったアプリは、**Metro を起動していなくても単体で起動します。**
+
+#### 注意点（重要）
+
+- Release ビルドは **ホットリロード / Debug with Chrome などの開発機能が使えません**（代わりに“単体で動く”ことを検証できます）。
+- **インストール自体は初回は Mac が必要**です。Mac なしで配布・再インストールまで行いたい場合は TestFlight が必要になります（後述）。
+- Apple ID の **Personal Team** で署名している場合、インストールしたアプリは **数日で期限切れ**になることがあります。継続運用するなら Apple Developer Program が推奨です。
+
+#### Mac なしで「配布・再インストール」までしたい場合（TestFlight）
+
+- App Store Connect にアップロードして **TestFlight 配布**にすると、iPhone 側だけでインストール・更新ができます。
+- 必要なもの:
+  - Apple Developer Program（有料）
+  - `Product` → `Archive` → `Distribute App` → TestFlight の手順
+
 ### 4. iPhone 実機テストの準備
 
 > ここでは、すでに `ios/` プロジェクトが存在している前提での流れを記載します。  
@@ -84,6 +114,19 @@ React Native アプリ自体はネイティブで動作しますが、JavaScript
    ```bash
    brew install ios-deploy
    ```
+
+3. （重要）`Bundle React Native code and images` が失敗する場合の対策
+
+`Command PhaseScriptExecution failed ...` の原因が `Bundle React Native code and images` の場合、以下が多いです。
+
+- **`node` が見つからない / Xcode から PATH が通っていない**
+  - 対策: `ios/.xcode.env` で `NODE_BINARY` を明示（本リポジトリでは追加済み）
+  - node の場所確認: `which node`
+
+- **`Error: EMFILE: too many open files, watch`**
+  - Xcode から `watchman` が見えず Metro が NodeWatcher にフォールバックしていることが多いです
+  - 対策: `ios/.xcode.env.local` で PATH / NODE_BINARY / WATCHMAN_BINARY を明示（本リポジトリでは追加済み）
+  - 変更後は Xcode を一度終了し、`BatsuGakuNative.xcworkspace` を開き直して再ビルド
 
 2. `*.xcworkspace` を Xcode で開く:
    - Finder で `ios/` フォルダを開き、`Batsugaku.xcworkspace`（仮）をダブルクリック。

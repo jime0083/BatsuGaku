@@ -1,6 +1,7 @@
 import React from 'react';
 import {SafeAreaView, Text, View} from 'react-native';
 import {UserStats, GoalSummary} from '../../types/stats';
+import {getEarnedBadges} from '../../utils/badges';
 
 // NOTE: 実際には Firestore から取得したデータを用いる想定。
 // ここではロジックと UI の骨組みのために仮データを置いている。
@@ -43,12 +44,30 @@ export const DashboardScreen: React.FC = () => {
     (mockStats.totalStudyDays / totalDays) * 100,
   );
 
+  const earnedBadges = getEarnedBadges(mockStats, mockStats.totalSkipDays);
+  const earnedBadgesLabel =
+    earnedBadges.length > 0
+      ? earnedBadges.map(b => b.label).join(', ')
+      : 'まだありません';
+
   return (
     <SafeAreaView>
-      <Text>ダッシュボード</Text>
+      <Text>ホーム</Text>
 
       <View>
-        <Text>基本統計</Text>
+        <Text>ホーム表示（必須項目）</Text>
+        <DashboardRow label="連続学習日数" value={mockStats.currentStreak} />
+        <DashboardRow label="累計学習日数" value={mockStats.totalStudyDays} />
+        <DashboardRow label="獲得バッジ" value={earnedBadgesLabel} />
+        <DashboardRow label="累計サボり日数" value={mockStats.totalSkipDays} />
+        <DashboardRow
+          label="今月のサボり日数"
+          value={mockStats.currentMonthSkipDays}
+        />
+      </View>
+
+      <View>
+        <Text>基本統計（その他）</Text>
         <DashboardRow
           label="今月の学習日数"
           value={mockStats.currentMonthStudyDays}
