@@ -20,8 +20,11 @@ const App: React.FC = () => {
   // - 未ログイン: Splash -> Login
   // - ログイン済 & 目標未設定: GoalSetup
   // - ログイン済 & 目標設定済: MainTabs
-  const isSignedIn = false;
-  const hasGoal = false;
+  // 現時点では認証/目標設定の永続化が未実装のため、
+  // 起動直後に必ずホーム（MainTabs）へ遷移させて表示確認できるようにする。
+  // 本実装時は Firebase の状態に応じて分岐を戻す。
+  const isSignedIn = true;
+  const hasGoal = true;
 
   const initialRouteName: keyof RootStackParamList = !isSignedIn
     ? 'Splash'
