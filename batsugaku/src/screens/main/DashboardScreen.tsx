@@ -1,7 +1,13 @@
 import React from 'react';
-import {SafeAreaView, Text, View} from 'react-native';
-import {UserStats, GoalSummary} from '../../types/stats';
-import {getEarnedBadges} from '../../utils/badges';
+import {
+  SafeAreaView,
+  Text,
+  View,
+  StyleSheet,
+  Image,
+  ImageBackground,
+} from 'react-native';
+import {UserStats} from '../../types/stats';
 
 // NOTE: 実際には Firestore から取得したデータを用いる想定。
 // ここではロジックと UI の骨組みのために仮データを置いている。
@@ -14,115 +20,168 @@ const mockStats: UserStats = {
   longestStreak: 14,
 };
 
-const mockGoal: GoalSummary = {
-  targetIncome: 800,
-  incomeType: 'monthly',
-  skill: 'React / TypeScript',
-  daysRemaining: 120,
+const ASSETS = {
+  bg1: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/背景1.png'),
+  bg2: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/背景2.png'),
+  bg3: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/背景3.png'),
+  bg4: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/背景4.png'),
+  bg5: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/背景5.png'),
+  check2: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/cheack2.png'),
+  check1: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/cheack1.png'),
+  tray: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/tray.png'),
+  flag: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/flag.png'),
+  calendar: require('../../../ios/BatsuGakuNative/Images.xcassets/AppIcon.appiconset/calendar.png'),
+} as const;
+
+type StatCardProps = {
+  title: string;
+  days: number;
+  backgroundSource: any;
+  iconSource: any;
 };
 
-const DashboardRow: React.FC<{label: string; value: string | number}> = ({
-  label,
-  value,
-}) => (
-  <View>
-    <Text>
-      {label}: {value}
-    </Text>
-  </View>
-);
+const StatCard: React.FC<StatCardProps> = ({
+  title,
+  days,
+  backgroundSource,
+  iconSource,
+}) => {
+  return (
+    <ImageBackground
+      source={backgroundSource}
+      resizeMode="cover"
+      style={styles.card}
+      imageStyle={styles.cardImage}>
+      <View style={styles.cardInner}>
+        <View style={styles.cardTitleRow}>
+          <Image source={iconSource} style={styles.cardIcon} />
+          <Text style={styles.cardTitle}>{title}</Text>
+        </View>
+
+        <View style={styles.cardDaysRow}>
+          <Text style={styles.daysNumber}>{days}</Text>
+          <Text style={styles.daysUnit}>日</Text>
+        </View>
+      </View>
+    </ImageBackground>
+  );
+};
 
 export const DashboardScreen: React.FC = () => {
-  const {currentMonthStudyDays, currentMonthSkipDays} = mockStats;
-  const daysElapsed = currentMonthStudyDays + currentMonthSkipDays || 1;
-  const monthlyRate = Math.round(
-    (currentMonthStudyDays / daysElapsed) * 100,
-  );
-  const totalDays =
-    mockStats.totalStudyDays + mockStats.totalSkipDays || 1;
-  const totalRate = Math.round(
-    (mockStats.totalStudyDays / totalDays) * 100,
-  );
-
-  const earnedBadges = getEarnedBadges(mockStats, mockStats.totalSkipDays);
-  const earnedBadgesLabel =
-    earnedBadges.length > 0
-      ? earnedBadges.map(b => b.label).join(', ')
-      : 'まだありません';
-
   return (
-    <SafeAreaView>
-      <Text>ホーム</Text>
-
-      <View>
-        <Text>ホーム表示（必須項目）</Text>
-        <DashboardRow label="連続学習日数" value={mockStats.currentStreak} />
-        <DashboardRow label="累計学習日数" value={mockStats.totalStudyDays} />
-        <DashboardRow label="獲得バッジ" value={earnedBadgesLabel} />
-        <DashboardRow label="累計サボり日数" value={mockStats.totalSkipDays} />
-        <DashboardRow
-          label="今月のサボり日数"
-          value={mockStats.currentMonthSkipDays}
-        />
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerMenu}>☰</Text>
       </View>
 
-      <View>
-        <Text>基本統計（その他）</Text>
-        <DashboardRow
-          label="今月の学習日数"
-          value={mockStats.currentMonthStudyDays}
+      <View style={styles.list}>
+        <StatCard
+          title="累計学習日数"
+          days={mockStats.totalStudyDays}
+          backgroundSource={ASSETS.bg1}
+          iconSource={ASSETS.check2}
         />
-        <DashboardRow
-          label="今月のサボり日数"
-          value={mockStats.currentMonthSkipDays}
+        <StatCard
+          title="連続学習日数"
+          days={mockStats.currentStreak}
+          backgroundSource={ASSETS.bg2}
+          iconSource={ASSETS.check1}
         />
-        <DashboardRow
-          label="累計学習日数"
-          value={mockStats.totalStudyDays}
+        <StatCard
+          title="今月の学習日数"
+          days={mockStats.currentMonthStudyDays}
+          backgroundSource={ASSETS.bg3}
+          iconSource={ASSETS.tray}
         />
-        <DashboardRow
-          label="累計サボり日数"
-          value={mockStats.totalSkipDays}
+        <StatCard
+          title="今月のサボり日数"
+          days={mockStats.currentMonthSkipDays}
+          backgroundSource={ASSETS.bg4}
+          iconSource={ASSETS.flag}
         />
-        <DashboardRow
-          label="現在の連続学習日数"
-          value={mockStats.currentStreak}
-        />
-        <DashboardRow
-          label="最長連続学習日数"
-          value={mockStats.longestStreak}
-        />
-      </View>
-
-      <View>
-        <Text>目標情報</Text>
-        <DashboardRow
-          label="目標収入"
-          value={
-            mockGoal.incomeType === 'monthly'
-              ? `月収 ${mockGoal.targetIncome} 万円`
-              : `年収 ${mockGoal.targetIncome} 万円`
-          }
-        />
-        <DashboardRow label="習得予定スキル" value={mockGoal.skill} />
-        <DashboardRow
-          label="目標達成期限までの残り日数"
-          value={mockGoal.daysRemaining}
-        />
-      </View>
-
-      <View>
-        <Text>学習率</Text>
-        <DashboardRow
-          label="今月の学習達成率"
-          value={`${monthlyRate}%`}
-        />
-        <DashboardRow
-          label="全期間の学習達成率"
-          value={`${totalRate}%`}
+        <StatCard
+          title="累計サボり日数"
+          days={mockStats.totalSkipDays}
+          backgroundSource={ASSETS.bg5}
+          iconSource={ASSETS.calendar}
         />
       </View>
     </SafeAreaView>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  header: {
+    height: 60,
+    backgroundColor: '#6b6b6b',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingHorizontal: 18,
+  },
+  headerMenu: {
+    color: '#fff',
+    fontSize: 28,
+    lineHeight: 28,
+  },
+  list: {
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    gap: 20,
+  },
+  card: {
+    width: '100%',
+    height: 140,
+    borderRadius: 22,
+    overflow: 'hidden',
+  },
+  cardImage: {
+    borderRadius: 22,
+  },
+  cardInner: {
+    flex: 1,
+    paddingTop: 20,
+    paddingLeft: 20,
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start', // アイコンとタイトルは上揃え
+  },
+  cardIcon: {
+    width: 20,
+    height: 20,
+    marginRight: 10,
+    resizeMode: 'contain',
+  },
+  cardTitle: {
+    fontSize: 24,
+    // NOTE: フォントファイルがプロジェクトに登録されている必要があります
+    fontFamily: 'NotoSansJP-Black',
+    fontWeight: '900',
+    color: '#fff',
+  },
+  cardDaysRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginTop: 0, // タイトルとの空白 0px
+  },
+  daysNumber: {
+    fontSize: 80,
+    fontFamily: 'NotoSansJP-Black',
+    fontWeight: '900',
+    color: '#fff',
+    lineHeight: 86,
+  },
+  daysUnit: {
+    fontSize: 24,
+    fontFamily: 'NotoSansJP-Black',
+    fontWeight: '900',
+    color: '#fff',
+    marginLeft: 0, // 「◯」と「日」の空白 0px
+    lineHeight: 32,
+  },
+});
 
