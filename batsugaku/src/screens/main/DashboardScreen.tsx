@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Image,
   ImageBackground,
+  ScrollView,
 } from 'react-native';
 import {UserStats} from '../../types/stats';
 
@@ -74,7 +75,10 @@ export const DashboardScreen: React.FC = () => {
         <Text style={styles.headerMenu}>☰</Text>
       </View>
 
-      <View style={styles.list}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}>
         <StatCard
           title="累計学習日数"
           days={mockStats.totalStudyDays}
@@ -105,7 +109,7 @@ export const DashboardScreen: React.FC = () => {
           backgroundSource={ASSETS.bg5}
           iconSource={ASSETS.calendar}
         />
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -127,10 +131,14 @@ const styles = StyleSheet.create({
     fontSize: 28,
     lineHeight: 28,
   },
+  scroll: {
+    flex: 1,
+  },
   list: {
     paddingTop: 20,
     paddingHorizontal: 20,
     gap: 20,
+    paddingBottom: 20,
   },
   card: {
     width: '100%',

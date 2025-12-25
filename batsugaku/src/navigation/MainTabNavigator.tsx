@@ -16,7 +16,13 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 
 export const MainTabNavigator: React.FC = () => {
   return (
-    <Tab.Navigator>
+    <Tab.Navigator
+      screenOptions={{
+        // 上部の "Dashboard" などのヘッダーを非表示
+        headerShown: false,
+        // 下部タブバーを非表示
+        tabBarStyle: {display: 'none'},
+      }}>
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Calendar" component={CalendarScreen} />
       <Tab.Screen name="Badges" component={BadgesScreen} />
