@@ -6,6 +6,7 @@ import {
   StudyLogDocument,
   UserDocument,
 } from './types/firestore';
+import {OAuthStateDoc, newStateId} from './oauth/state';
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -14,10 +15,270 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const messaging = admin.messaging();
 
+type Provider = 'github' | 'x';
+
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} is not set`);
+  return v;
+}
+
+function buildRedirect(url: string): string {
+  return url;
+}
+
+function nowTs() {
+  return admin.firestore.Timestamp.now();
+}
+
+async function createOAuthState(params: {
+  provider: Provider;
+  uid: string;
+  redirectUri: string;
+  codeVerifier?: string;
+}) {
+  const stateId = newStateId();
+  const createdAt = nowTs();
+  const expiresAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() + 15 * 60 * 1000,
+  );
+  const doc: OAuthStateDoc = {
+    provider: params.provider,
+    uid: params.uid,
+    redirectUri: params.redirectUri,
+    createdAt,
+    expiresAt,
+    ...(params.codeVerifier ? {codeVerifier: params.codeVerifier} : {}),
+  };
+  await db.collection('oauthStates').doc(stateId).set(doc);
+  return stateId;
+}
+
+async function consumeOAuthState(stateId: string): Promise<OAuthStateDoc> {
+  const ref = db.collection('oauthStates').doc(stateId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error('invalid state');
+  const doc = snap.data() as OAuthStateDoc;
+  await ref.delete();
+  if (doc.expiresAt.toMillis() < Date.now()) throw new Error('state expired');
+  return doc;
+}
+
 // シンプルなヘルスチェック
 export const healthCheck = functions.https.onRequest((_req, res) => {
   res.status(200).send('OK');
 });
+
+// ===== OAuth start endpoints =====
+
+export const startGitHubOAuth = functions
+  .region('asia-northeast1')
+  .https.onRequest(async (req, res) => {
+    try {
+      const uid = String(req.query.uid ?? '');
+      const redirectUri = String(req.query.redirectUri ?? '');
+      if (!uid || !redirectUri) {
+        res.status(400).send('uid and redirectUri are required');
+        return;
+      }
+
+      const clientId = requireEnv('GITHUB_CLIENT_ID');
+      const stateId = await createOAuthState({
+        provider: 'github',
+        uid,
+        redirectUri,
+      });
+
+      const githubAuthorize = new URL('https://github.com/login/oauth/authorize');
+      githubAuthorize.searchParams.set('client_id', clientId);
+      githubAuthorize.searchParams.set('state', stateId);
+      githubAuthorize.searchParams.set('scope', 'repo public_repo');
+
+      res.redirect(302, githubAuthorize.toString());
+    } catch (e: any) {
+      res.status(500).send(String(e?.message ?? e));
+    }
+  });
+
+export const startXOAuth = functions
+  .region('asia-northeast1')
+  .https.onRequest(async (req, res) => {
+    try {
+      const uid = String(req.query.uid ?? '');
+      const redirectUri = String(req.query.redirectUri ?? '');
+      if (!uid || !redirectUri) {
+        res.status(400).send('uid and redirectUri are required');
+        return;
+      }
+
+      // OAuth2 (PKCE)
+      const clientId = requireEnv('X_CLIENT_ID');
+      const callbackUrl = requireEnv('X_REDIRECT_URI'); // functions callback URL
+
+      const codeVerifier = admin.firestore().collection('_').doc().id + admin.firestore().collection('_').doc().id;
+      const codeChallenge = codeVerifier; // TODO: S256 にする（本番必須）
+      const codeChallengeMethod = 'plain';
+
+      const stateId = await createOAuthState({
+        provider: 'x',
+        uid,
+        redirectUri,
+        codeVerifier,
+      });
+
+      const authorize = new URL('https://twitter.com/i/oauth2/authorize');
+      authorize.searchParams.set('response_type', 'code');
+      authorize.searchParams.set('client_id', clientId);
+      authorize.searchParams.set('redirect_uri', callbackUrl);
+      authorize.searchParams.set('scope', 'tweet.read tweet.write users.read offline.access');
+      authorize.searchParams.set('state', stateId);
+      authorize.searchParams.set('code_challenge', codeChallenge);
+      authorize.searchParams.set('code_challenge_method', codeChallengeMethod);
+
+      res.redirect(302, authorize.toString());
+    } catch (e: any) {
+      res.status(500).send(String(e?.message ?? e));
+    }
+  });
+
+// ===== OAuth callback endpoints =====
+
+export const githubOAuthCallback = functions
+  .region('asia-northeast1')
+  .https.onRequest(async (req, res) => {
+    try {
+      const code = String(req.query.code ?? '');
+      const state = String(req.query.state ?? '');
+      if (!code || !state) {
+        res.status(400).send('missing code/state');
+        return;
+      }
+
+      const stateDoc = await consumeOAuthState(state);
+      if (stateDoc.provider !== 'github') throw new Error('provider mismatch');
+
+      const clientId = requireEnv('GITHUB_CLIENT_ID');
+      const clientSecret = requireEnv('GITHUB_CLIENT_SECRET');
+
+      // Exchange code -> token
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+        }),
+      });
+      const tokenJson: any = await tokenRes.json();
+      const accessToken = String(tokenJson.access_token ?? '');
+      if (!accessToken) throw new Error('token exchange failed');
+
+      // Fetch user profile
+      const meRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `token ${accessToken}`,
+          'User-Agent': 'batsugaku',
+          Accept: 'application/vnd.github+json',
+        },
+      });
+      const me: any = await meRes.json();
+
+      await db.collection('users').doc(stateDoc.uid).set(
+        {
+          github: {
+            id: String(me.id ?? ''),
+            username: String(me.login ?? ''),
+            accessTokenEncrypted: encrypt(accessToken),
+          },
+          linked: {github: true},
+          updatedAt: nowTs(),
+        },
+        {merge: true},
+      );
+
+      res.redirect(
+        302,
+        buildRedirect(
+          `${stateDoc.redirectUri}?provider=github&status=success`,
+        ),
+      );
+    } catch (e: any) {
+      res.status(500).send(String(e?.message ?? e));
+    }
+  });
+
+export const xOAuthCallback = functions
+  .region('asia-northeast1')
+  .https.onRequest(async (req, res) => {
+    try {
+      const code = String(req.query.code ?? '');
+      const state = String(req.query.state ?? '');
+      if (!code || !state) {
+        res.status(400).send('missing code/state');
+        return;
+      }
+      const stateDoc = await consumeOAuthState(state);
+      if (stateDoc.provider !== 'x') throw new Error('provider mismatch');
+
+      const clientId = requireEnv('X_CLIENT_ID');
+      const clientSecret = requireEnv('X_CLIENT_SECRET');
+      const callbackUrl = requireEnv('X_REDIRECT_URI');
+
+      // Exchange code -> token
+      const tokenRes = await fetch('https://api.twitter.com/2/oauth2/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization:
+            'Basic ' +
+            Buffer.from(`${clientId}:${clientSecret}`).toString('base64'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: callbackUrl,
+          code_verifier: stateDoc.codeVerifier ?? '',
+        }),
+      });
+      const tokenJson: any = await tokenRes.json();
+      const accessToken = String(tokenJson.access_token ?? '');
+      if (!accessToken) throw new Error('token exchange failed');
+
+      // Fetch user profile
+      const meRes = await fetch('https://api.twitter.com/2/users/me', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      const meJson: any = await meRes.json();
+      const me = meJson?.data ?? {};
+
+      await db.collection('users').doc(stateDoc.uid).set(
+        {
+          twitter: {
+            id: String(me.id ?? ''),
+            username: String(me.username ?? ''),
+            accessTokenEncrypted: encrypt(accessToken),
+            accessTokenSecretEncrypted: '', // OAuth2 のため空
+          },
+          linked: {x: true},
+          updatedAt: nowTs(),
+        },
+        {merge: true},
+      );
+
+      res.redirect(
+        302,
+        buildRedirect(`${stateDoc.redirectUri}?provider=x&status=success`),
+      );
+    } catch (e: any) {
+      res.status(500).send(String(e?.message ?? e));
+    }
+  });
 
 // GitHub Webhook: push イベントを受け取り学習ログ・統計を更新し、初回 push 時に通知を送信
 export const onGitHubPush = functions
@@ -85,6 +346,7 @@ export const onGitHubPush = functions
       isFirstPushOfDay = true;
     } else {
       await logRef.update({
+        studied: true,
         pushCount: admin.firestore.FieldValue.increment(1),
       });
     }
