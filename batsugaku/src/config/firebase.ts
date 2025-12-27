@@ -6,12 +6,12 @@ import {getFirestore} from 'firebase/firestore';
 // - iOS ネイティブの GoogleService-Info.plist とは別物です（JS SDK 用）。
 // - まだ用意できていない場合は空のままでもアプリは起動しますが、連携機能は動きません。
 const firebaseConfig = {
-  apiKey: '',
-  authDomain: '',
-  projectId: '',
-  storageBucket: '',
-  messagingSenderId: '',
-  appId: '',
+  apiKey: 'AIzaSyChroAIgZ60g4Qlx46GOvukbRFTUpOH4wY',
+  authDomain: 'batsugaku.firebaseapp.com',
+  projectId: 'batsugaku',
+  storageBucket: 'batsugaku.firebasestorage.app',
+  messagingSenderId: '518497599552',
+  appId: '1:518497599552:web:f2c5c1feab181d0e299fa5',
 };
 
 export const firebaseApp =
