@@ -6,11 +6,13 @@ import {LoginScreen} from './screens/auth/LoginScreen';
 import {GoalSetupScreen} from './screens/goal/GoalSetupScreen';
 import {MainTabNavigator} from './navigation/MainTabNavigator';
 import {ConnectAccountsScreen} from './screens/onboarding/ConnectAccountsScreen';
+import {SubscriptionScreen} from './screens/subscription/SubscriptionScreen';
 
 export type RootStackParamList = {
   Splash: undefined;
   Login: undefined;
   ConnectAccounts: undefined;
+  Subscription: undefined;
   GoalSetup: undefined;
   MainTabs: undefined;
 };
@@ -36,6 +38,7 @@ const App: React.FC = () => {
           name="ConnectAccounts"
           component={ConnectAccountsScreen}
         />
+        <Stack.Screen name="Subscription" component={SubscriptionScreen} />
         <Stack.Screen name="GoalSetup" component={GoalSetupScreen} />
         <Stack.Screen name="MainTabs" component={MainTabNavigator} />
       </Stack.Navigator>

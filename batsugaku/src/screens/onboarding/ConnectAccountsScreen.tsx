@@ -22,6 +22,8 @@ import {firebaseAuth, firestore, isFirebaseConfigured} from '../../config/fireba
 type UserLinkState = {
   xLinked: boolean;
   githubLinked: boolean;
+  subscribed: boolean;
+  hasGoal: boolean;
 };
 
 const disabledButtonColor = '#CCCCCC';
@@ -45,6 +47,8 @@ export const ConnectAccountsScreen: React.FC = () => {
   const [linkState, setLinkState] = useState<UserLinkState>({
     xLinked: false,
     githubLinked: false,
+    subscribed: false,
+    hasGoal: false,
   });
   const [isBusy, setIsBusy] = useState(false);
 
@@ -70,6 +74,8 @@ export const ConnectAccountsScreen: React.FC = () => {
       setLinkState({
         xLinked: Boolean(data?.linked?.x),
         githubLinked: Boolean(data?.linked?.github),
+        subscribed: Boolean(data?.subscription?.active),
+        hasGoal: Boolean(data?.goal?.targetIncome) && Boolean(data?.goal?.skill),
       });
       },
     );
@@ -81,6 +87,7 @@ export const ConnectAccountsScreen: React.FC = () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         linked: {x: false, github: false},
+        subscription: {active: false},
       },
       {merge: true},
     ).catch(() => undefined);
@@ -140,12 +147,20 @@ export const ConnectAccountsScreen: React.FC = () => {
     );
   }
 
-  // 両方連携できたらアプリ本体へ
+  // 両方連携できたら「サブスク」→「目標設定」へ進める（両方連携しないと使えない）
   useEffect(() => {
     if (canUseApp) {
+      if (!linkState.subscribed) {
+        navigation.replace('Subscription');
+        return;
+      }
+      if (!linkState.hasGoal) {
+        navigation.replace('GoalSetup');
+        return;
+      }
       navigation.replace('MainTabs');
     }
-  }, [canUseApp, navigation]);
+  }, [canUseApp, linkState.subscribed, linkState.hasGoal, navigation]);
 
   return (
     <SafeAreaView style={styles.container}>

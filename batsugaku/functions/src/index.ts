@@ -5,6 +5,8 @@ import * as admin from 'firebase-admin';
 import crypto from 'crypto';
 import {encrypt} from './security/crypto';
 import {OAuthStateDoc, newStateId} from './oauth/state';
+import {onSchedule} from 'firebase-functions/v2/scheduler';
+import {decrypt} from './security/crypto';
 
 setGlobalOptions({
   region: 'asia-northeast1',
@@ -298,3 +300,85 @@ export const oauth = onRequest(
 export const healthCheck = onRequest((_req, res) => {
   res.status(200).send('OK');
 });
+
+function formatSkipPostText(goal: any): string {
+  const income = goal?.targetIncome;
+  const skill = goal?.skill;
+  return `年収${income}万を目指し${skill}をすると宣言したにもかかわらず今日サボってしまった愚かな人間です`;
+}
+
+async function postTweet(accessToken: string, text: string) {
+  const resp = await (globalThis.fetch as any)('https://api.twitter.com/2/tweets', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({text}),
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`x tweet failed: ${resp.status} ${body}`);
+  }
+}
+
+function jstYesterdayKey(): string {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  jst.setUTCDate(jst.getUTCDate() - 1);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth() + 1;
+  const d = jst.getUTCDate();
+  return `${y}${String(m).padStart(2, '0')}${String(d).padStart(2, '0')}`;
+}
+
+export const checkDailyStudyAndPostSkip = onSchedule(
+  {
+    schedule: '0 0 * * *',
+    timeZone: 'Asia/Tokyo',
+    secrets: [SECRET_ENCRYPTION_KEY],
+  },
+  async () => {
+    // crypto.ts は process.env を参照するので、secret を env に注入
+    if (!process.env.SECRET_ENCRYPTION_KEY) {
+      process.env.SECRET_ENCRYPTION_KEY = SECRET_ENCRYPTION_KEY.value();
+    }
+
+    const dateKey = jstYesterdayKey();
+    const usersSnap = await db.collection('users').get();
+
+    for (const userDoc of usersSnap.docs) {
+      const user: any = userDoc.data();
+
+      const linkedX = Boolean(user?.linked?.x);
+      const linkedGithub = Boolean(user?.linked?.github);
+      const subscribed = Boolean(user?.subscription?.active);
+      const goal = user?.goal;
+      const hasGoal = Boolean(goal?.targetIncome) && Boolean(goal?.skill);
+      const tokenEnc = user?.twitter?.accessTokenEncrypted;
+
+      if (!linkedX || !linkedGithub || !subscribed || !hasGoal || !tokenEnc) {
+        continue;
+      }
+
+      // push 監視は今後実装予定。現時点では studyLogs が無ければサボり扱い。
+      const logId = `${userDoc.id}_${dateKey}`;
+      const logSnap = await db.collection('studyLogs').doc(logId).get();
+      const studied = logSnap.exists && Boolean((logSnap.data() as any)?.studied);
+
+      if (studied) {
+        continue;
+      }
+
+      const accessToken = decrypt(String(tokenEnc));
+      const text = formatSkipPostText(goal);
+
+      try {
+        await postTweet(accessToken, text);
+      } catch (e) {
+        // TODO: リトライやログ基盤に送る（今は握りつぶして次ユーザーへ）
+        continue;
+      }
+    }
+  },
+);
