@@ -86,8 +86,9 @@ export const ConnectAccountsScreen: React.FC = () => {
         userId: uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        linked: {x: false, github: false},
-        subscription: {active: false},
+        // NOTE:
+        // linked / subscription / goal は Functions や各画面で更新されるため、
+        // ここでデフォルト値を入れて上書きしてしまうと、連携済みを false に戻す事故が起きる。
       },
       {merge: true},
     ).catch(() => undefined);

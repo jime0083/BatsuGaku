@@ -3,10 +3,9 @@ import {onRequest} from 'firebase-functions/v2/https';
 import {defineSecret} from 'firebase-functions/params';
 import * as admin from 'firebase-admin';
 import crypto from 'crypto';
-import {encrypt} from './security/crypto';
+import {decrypt, encrypt} from './security/crypto';
 import {OAuthStateDoc, newStateId} from './oauth/state';
 import {onSchedule} from 'firebase-functions/v2/scheduler';
-import {decrypt} from './security/crypto';
 
 setGlobalOptions({
   region: 'asia-northeast1',
@@ -28,6 +27,12 @@ const SECRET_ENCRYPTION_KEY = defineSecret('SECRET_ENCRYPTION_KEY');
 
 function nowTs() {
   return admin.firestore.Timestamp.now();
+}
+
+function ensureEncryptionKeyFromSecret() {
+  if (!process.env.SECRET_ENCRYPTION_KEY) {
+    process.env.SECRET_ENCRYPTION_KEY = SECRET_ENCRYPTION_KEY.value();
+  }
 }
 
 function base64Url(input: Buffer) {
@@ -88,6 +93,131 @@ function redirectToApp(res: any, redirectUri: string, provider: string, status: 
   res.redirect(302, url.toString());
 }
 
+function getRootUrl(req: any): string {
+  const proto = (req.get('x-forwarded-proto') || 'https').split(',')[0].trim();
+  const host = req.get('host');
+  return `${proto}://${host}`;
+}
+
+function jstTodayKey(): string {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth() + 1;
+  const d = jst.getUTCDate();
+  return `${y}${String(m).padStart(2, '0')}${String(d).padStart(2, '0')}`;
+}
+
+function jstMidnightTimestamp(year: number, month1to12: number, day: number) {
+  return admin.firestore.Timestamp.fromDate(
+    new Date(Date.UTC(year, month1to12 - 1, day, 0, 0, 0)),
+  );
+}
+
+function verifyGitHubSignature(rawBody: Buffer, secret: string, signatureHeader: string | undefined) {
+  if (!signatureHeader) return false;
+  const prefix = 'sha256=';
+  if (!signatureHeader.startsWith(prefix)) return false;
+  const expected = prefix + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signatureHeader);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+async function installGitHubWebhooksForUser(params: {
+  req: any;
+  uid: string;
+  accessToken: string;
+}) {
+  // webhook secret (per-user)
+  const secretPlain = base64Url(crypto.randomBytes(32));
+  const secretEnc = encrypt(secretPlain);
+
+  const webhookUrl = `${getRootUrl(params.req)}/githubWebhook?uid=${encodeURIComponent(params.uid)}`;
+
+  // Store secret (encrypted) + url for debugging
+  await db.collection('users').doc(params.uid).set(
+    {
+      github: {
+        webhookSecretEncrypted: secretEnc,
+        webhookUrl,
+      },
+      updatedAt: nowTs(),
+    },
+    {merge: true},
+  );
+
+  // List repos (paginate)
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const reposRes = await (globalThis.fetch as any)(
+      `https://api.github.com/user/repos?per_page=100&page=${page}&visibility=all&affiliation=owner,collaborator,organization_member`,
+      {
+        headers: {
+          Authorization: `token ${params.accessToken}`,
+          'User-Agent': 'batsugaku',
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!reposRes.ok) {
+      const body = await reposRes.text();
+      throw new Error(`github repos failed: ${reposRes.status} ${body}`);
+    }
+    const repos: any[] = await reposRes.json();
+    if (!Array.isArray(repos) || repos.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    for (const repo of repos) {
+      const fullName = String(repo?.full_name ?? '');
+      if (!fullName || !fullName.includes('/')) continue;
+
+      // Create webhook (best-effort)
+      const hooksRes = await (globalThis.fetch as any)(
+        `https://api.github.com/repos/${fullName}/hooks`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `token ${params.accessToken}`,
+            'User-Agent': 'batsugaku',
+            Accept: 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'web',
+            active: true,
+            events: ['push'],
+            config: {
+              url: webhookUrl,
+              content_type: 'json',
+              secret: secretPlain,
+              insecure_ssl: '0',
+            },
+          }),
+        },
+      );
+
+      // 201 created / 422 already exists / 404 no admin rights etc.
+      if (hooksRes.status === 201 || hooksRes.status === 422) {
+        continue;
+      }
+      // ignore failures per repo (permissions)
+      // eslint-disable-next-line no-console
+      continue;
+    }
+
+    if (repos.length < 100) {
+      hasMore = false;
+      break;
+    }
+    page += 1;
+  }
+}
+
 // OAuth router:
 // - /oauth/github/start
 // - /oauth/github/callback
@@ -98,9 +228,7 @@ export const oauth = onRequest(
   async (req, res) => {
     try {
       // crypto.ts は process.env を参照するので、secret を env に注入
-      if (!process.env.SECRET_ENCRYPTION_KEY) {
-        process.env.SECRET_ENCRYPTION_KEY = SECRET_ENCRYPTION_KEY.value();
-      }
+      ensureEncryptionKeyFromSecret();
 
       const path = req.path || '/';
       if (req.method !== 'GET') {
@@ -172,6 +300,13 @@ export const oauth = onRequest(
         });
         const me: any = await meRes.json();
 
+        // Webhook を自動登録（push監視のA案）
+        await installGitHubWebhooksForUser({
+          req,
+          uid: stateDoc.uid,
+          accessToken,
+        });
+
         await db.collection('users').doc(stateDoc.uid).set(
           {
             github: {
@@ -179,7 +314,7 @@ export const oauth = onRequest(
               username: String(me.login ?? ''),
               accessTokenEncrypted: encrypt(accessToken),
             },
-            linked: {github: true},
+            'linked.github': true,
             updatedAt: nowTs(),
           },
           {merge: true},
@@ -280,7 +415,7 @@ export const oauth = onRequest(
               accessTokenEncrypted: encrypt(accessToken),
               accessTokenSecretEncrypted: '',
             },
-            linked: {x: true},
+            'linked.x': true,
             updatedAt: nowTs(),
           },
           {merge: true},
@@ -340,9 +475,7 @@ export const checkDailyStudyAndPostSkip = onSchedule(
   },
   async () => {
     // crypto.ts は process.env を参照するので、secret を env に注入
-    if (!process.env.SECRET_ENCRYPTION_KEY) {
-      process.env.SECRET_ENCRYPTION_KEY = SECRET_ENCRYPTION_KEY.value();
-    }
+    ensureEncryptionKeyFromSecret();
 
     const dateKey = jstYesterdayKey();
     const usersSnap = await db.collection('users').get();
@@ -379,6 +512,96 @@ export const checkDailyStudyAndPostSkip = onSchedule(
         // TODO: リトライやログ基盤に送る（今は握りつぶして次ユーザーへ）
         continue;
       }
+    }
+  },
+);
+
+// ===== GitHub Webhook (push監視) =====
+export const githubWebhook = onRequest(
+  {secrets: [SECRET_ENCRYPTION_KEY]},
+  async (req, res) => {
+    try {
+      ensureEncryptionKeyFromSecret();
+
+      const uid = String(req.query.uid ?? '');
+      if (!uid) {
+        res.status(400).send('missing uid');
+        return;
+      }
+
+      const event = String(req.get('x-github-event') ?? '');
+      if (event !== 'push') {
+        res.status(200).send('ignored');
+        return;
+      }
+
+      const userSnap = await db.collection('users').doc(uid).get();
+      if (!userSnap.exists) {
+        res.status(404).send('user not found');
+        return;
+      }
+      const user: any = userSnap.data();
+      const secretEnc = user?.github?.webhookSecretEncrypted;
+      if (!secretEnc) {
+        res.status(403).send('missing webhook secret');
+        return;
+      }
+      const secretPlain = decrypt(String(secretEnc));
+
+      const sig = String(req.get('x-hub-signature-256') ?? '');
+      const rawBody: Buffer = (req as any).rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
+      if (!verifyGitHubSignature(rawBody, secretPlain, sig)) {
+        res.status(401).send('invalid signature');
+        return;
+      }
+
+      const dateKey = jstTodayKey();
+      const now = new Date();
+      const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      const y = jst.getUTCFullYear();
+      const m = jst.getUTCMonth() + 1;
+      const d = jst.getUTCDate();
+      const midnight = jstMidnightTimestamp(y, m, d);
+      const nowTimestamp = nowTs();
+
+      const logId = `${uid}_${dateKey}`;
+      const logRef = db.collection('studyLogs').doc(logId);
+
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(logRef);
+        if (!snap.exists) {
+          tx.set(logRef, {
+            userId: uid,
+            date: midnight,
+            studied: true,
+            pushCount: 1,
+            firstPushAt: nowTimestamp,
+            createdAt: nowTimestamp,
+          });
+        } else {
+          const data: any = snap.data();
+          const updates: any = {
+            studied: true,
+            pushCount: admin.firestore.FieldValue.increment(1),
+          };
+          if (!data?.firstPushAt) {
+            updates.firstPushAt = nowTimestamp;
+          }
+          tx.update(logRef, updates);
+        }
+        tx.set(
+          db.collection('users').doc(uid),
+          {
+            'stats.lastStudyDate': midnight,
+            updatedAt: nowTimestamp,
+          },
+          {merge: true},
+        );
+      });
+
+      res.status(200).send('ok');
+    } catch (e: any) {
+      res.status(500).send(String(e?.message ?? e));
     }
   },
 );
