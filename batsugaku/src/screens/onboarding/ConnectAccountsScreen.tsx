@@ -6,6 +6,7 @@ import {
   Linking,
   Pressable,
   StyleSheet,
+  Alert,
 } from 'react-native';
 import {onAuthStateChanged, signInAnonymously, User} from 'firebase/auth';
 import {
@@ -17,7 +18,14 @@ import {
   DocumentSnapshot,
 } from 'firebase/firestore';
 import {useNavigation} from '@react-navigation/native';
-import {firebaseAuth, firestore, isFirebaseConfigured} from '../../config/firebase';
+import {
+  firebaseAuth,
+  firestore,
+  firebaseProjectId,
+  isFirebaseConfigured,
+  validateFirebaseConfig,
+} from '../../config/firebase';
+import {getFunctionsBaseUrl} from '../../config/functions';
 
 type UserLinkState = {
   xLinked: boolean;
@@ -25,6 +33,8 @@ type UserLinkState = {
   subscribed: boolean;
   hasGoal: boolean;
 };
+
+type AuthInitStatus = 'idle' | 'initializing' | 'ready' | 'error';
 
 const disabledButtonColor = '#CCCCCC';
 const enabledButtonColor = '#111111';
@@ -44,6 +54,7 @@ function parseDeepLink(url: string): Record<string, string> {
 export const ConnectAccountsScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const [uid, setUid] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthInitStatus>('idle');
   const [linkState, setLinkState] = useState<UserLinkState>({
     xLinked: false,
     githubLinked: false,
@@ -51,15 +62,38 @@ export const ConnectAccountsScreen: React.FC = () => {
     hasGoal: false,
   });
   const [isBusy, setIsBusy] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
+
+  const retryAnonymousAuth = useCallback(async () => {
+    if (!isFirebaseConfigured()) return;
+    setAuthStatus('initializing');
+    setInitError(null);
+    try {
+      await signInAnonymously(firebaseAuth);
+    } catch (e: any) {
+      console.error('匿名認証に失敗しました', e);
+      setInitError(String(e?.message ?? e));
+      setAuthStatus('error');
+    }
+  }, []);
 
   useEffect(() => {
     if (!isFirebaseConfigured()) return;
+    setAuthStatus('initializing');
     const unsub = onAuthStateChanged(firebaseAuth, async (user: User | null) => {
       if (!user) {
-        await signInAnonymously(firebaseAuth);
+        try {
+          await signInAnonymously(firebaseAuth);
+        } catch (e: any) {
+          console.error('匿名認証に失敗しました', e);
+          setInitError(String(e?.message ?? e));
+          setAuthStatus('error');
+        }
         return;
       }
       setUid(user.uid);
+      setInitError(null);
+      setAuthStatus('ready');
     });
     return unsub;
   }, []);
@@ -111,17 +145,30 @@ export const ConnectAccountsScreen: React.FC = () => {
   const canUseApp = linkState.xLinked && linkState.githubLinked;
 
   const baseApi = useMemo(() => {
-    // TODO: Firebase の projectId を設定したら自動で base URL を生成
-    // 例: https://asia-northeast1-<projectId>.cloudfunctions.net
-    const projectId = (firestore.app.options as any)?.projectId as string | undefined;
-    if (!projectId) return '';
-    return `https://asia-northeast1-${projectId}.cloudfunctions.net`;
+    // firestore.app.options.projectId に依存すると、初期化失敗時に空になるケースがあるため、
+    // src/config/firebase.ts の projectId を正とする。
+    return getFunctionsBaseUrl(firebaseProjectId);
   }, []);
+
+  const isReadyToStartOAuth =
+    authStatus === 'ready' && Boolean(uid) && Boolean(baseApi) && !isBusy;
 
   const startOAuth = useCallback(
     async (provider: 'x' | 'github') => {
-      if (!uid) return;
-      if (!baseApi) return;
+      if (!uid) {
+        Alert.alert('準備中', '認証の初期化中です。数秒待ってからもう一度お試しください。');
+        return;
+      }
+      if (!baseApi) {
+        const cfg = validateFirebaseConfig();
+        Alert.alert(
+          '設定エラー',
+          cfg.ok
+            ? 'Functions のURLを作れませんでした。`src/config/functions.ts` の FUNCTIONS_BASE_URL_OVERRIDE を設定してください。'
+            : `Firebase 設定が不完全です:\n- ${cfg.problems.join('\n- ')}\n\nsrc/config/firebase.ts を確認してください。`,
+        );
+        return;
+      }
 
       setIsBusy(true);
       try {
@@ -129,7 +176,17 @@ export const ConnectAccountsScreen: React.FC = () => {
         const url = `${baseApi}/oauth/${provider}/start?uid=${encodeURIComponent(
           uid,
         )}&redirectUri=${encodeURIComponent(redirectUri)}`;
+        const can = await Linking.canOpenURL(url);
+        if (!can) {
+          throw new Error(`canOpenURL returned false: ${url}`);
+        }
         await Linking.openURL(url);
+      } catch (e: any) {
+        console.error('OAuth開始に失敗しました', e);
+        Alert.alert(
+          'エラー',
+          'ブラウザを開けませんでした。端末のネットワーク状態と Firebase Functions のデプロイ状況を確認してください。',
+        );
       } finally {
         setIsBusy(false);
       }
@@ -167,13 +224,21 @@ export const ConnectAccountsScreen: React.FC = () => {
     <SafeAreaView style={styles.container}>
       <View style={styles.inner}>
         <Text>最初に X と GitHub を連携してください（両方必須）</Text>
+        {authStatus === 'initializing' && (
+          <Text style={styles.subtleText}>認証を初期化しています…</Text>
+        )}
 
         <Pressable
           style={[
             styles.button,
-            {backgroundColor: linkState.xLinked ? disabledButtonColor : enabledButtonColor},
+            {
+              backgroundColor:
+                linkState.xLinked || !isReadyToStartOAuth
+                  ? disabledButtonColor
+                  : enabledButtonColor,
+            },
           ]}
-          disabled={linkState.xLinked || isBusy}
+          disabled={linkState.xLinked || !isReadyToStartOAuth}
           onPress={() => startOAuth('x')}>
           <Text style={styles.buttonText}>
             {linkState.xLinked ? 'X 連携済み' : 'Xと連携する'}
@@ -186,16 +251,40 @@ export const ConnectAccountsScreen: React.FC = () => {
             {
               backgroundColor: linkState.githubLinked
                 ? disabledButtonColor
-                : enabledButtonColor,
+                : !isReadyToStartOAuth
+                  ? disabledButtonColor
+                  : enabledButtonColor,
             },
           ]}
-          disabled={linkState.githubLinked || isBusy}
+          disabled={linkState.githubLinked || !isReadyToStartOAuth}
           onPress={() => startOAuth('github')}>
           <Text style={styles.buttonText}>
             {linkState.githubLinked ? 'GitHub 連携済み' : 'Githubと連携する'}
           </Text>
         </Pressable>
 
+        {!!initError && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorTitle}>認証初期化エラー</Text>
+            <Text style={styles.errorMessage}>{initError}</Text>
+            <Text style={styles.errorHint}>
+              代表例: auth/configuration-not-found は Firebase Console 側の Authentication 未初期化 or 匿名認証OFF が原因です。
+            </Text>
+            <Text style={styles.errorHint}>
+              Firebase Console → Authentication → 「始める」→ Sign-in method の Anonymous を有効化してから「再試行」を押してください。
+            </Text>
+            <Text style={styles.errorHint}>
+              併せて、GCP の API キー制限（HTTPリファラ制限等）で Auth がブロックされていないかも確認してください。
+            </Text>
+
+            <Pressable
+              style={[styles.button, { backgroundColor: enabledButtonColor }]}
+              onPress={retryAnonymousAuth}
+              disabled={isBusy}>
+              <Text style={styles.buttonText}>再試行</Text>
+            </Pressable>
+          </View>
+        )}
         <Text>状態: X={String(linkState.xLinked)} / GitHub={String(linkState.githubLinked)}</Text>
         <Text>両方連携完了: {String(canUseApp)}</Text>
       </View>
@@ -213,6 +302,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  errorBox: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fafafa',
+    gap: 8,
+  },
+  errorTitle: {fontSize: 14, fontWeight: '700', color: '#111'},
+  errorMessage: {fontSize: 12, color: '#111'},
+  errorHint: {fontSize: 12, color: '#333'},
+  subtleText: {fontSize: 12, color: '#666'},
 });
 
 

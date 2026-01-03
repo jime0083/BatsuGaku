@@ -20,8 +20,20 @@ export const firebaseApp =
 export const firebaseAuth = getAuth(firebaseApp);
 export const firestore = getFirestore(firebaseApp);
 
+export const firebaseProjectId: string = firebaseConfig.projectId;
+
 export function isFirebaseConfigured(): boolean {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+}
+
+export function validateFirebaseConfig(): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+  if (!firebaseConfig.apiKey) problems.push('apiKey が未設定です');
+  if (!firebaseConfig.projectId) problems.push('projectId が未設定です');
+  if (!firebaseConfig.authDomain) problems.push('authDomain が未設定です');
+  if (!firebaseConfig.appId) problems.push('appId が未設定です');
+
+  return { ok: problems.length === 0, problems };
 }
 
 
