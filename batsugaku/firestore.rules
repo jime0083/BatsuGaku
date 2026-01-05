@@ -2,6 +2,32 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ユーザー本人のドキュメントのみ読み書き可能（subscription/goal/linked の反映に必要）
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // 学習ログは本人のみ読み取り可。書き込みは基本 Functions（Admin SDK）で行う想定。
+    match /studyLogs/{docId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // バッジは本人のみ読み取り可（必要になったら write を追加）
+    match /badges/{docId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // デフォルトは閉じる
     match /{document=**} {
       allow read, write: if false;
     }

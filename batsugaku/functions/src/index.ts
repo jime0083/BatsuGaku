@@ -78,12 +78,19 @@ async function consumeOAuthState(stateId: string): Promise<OAuthStateDoc> {
   return doc;
 }
 
-function getFunctionBaseUrl(req: any): string {
-  // 例: https://asia-northeast1-batsugaku.cloudfunctions.net/oauth/github/start
-  // baseUrl は /oauth（関数名）になる
+function getOAuthPublicBaseUrl(req: any): string {
+  // Firebase Functions v2 は、アクセス経路によって URL の形が変わる:
+  // - cloudfunctions.net 経由: https://<region>-<project>.cloudfunctions.net/oauth/<path>
+  // - 直接 URL（a.run.app）:   https://oauth-xxxxx-xx.a.run.app/<path>
+  //
+  // 本関数は、プロバイダへ渡す redirect_uri を「実際に到達できる形」で生成する。
   const proto = (req.get('x-forwarded-proto') || 'https').split(',')[0].trim();
-  const host = req.get('host');
-  return `${proto}://${host}${req.baseUrl}`;
+  const host = String(req.get('host') || '').trim();
+  const root = `${proto}://${host}`;
+  if (host.endsWith('.cloudfunctions.net')) {
+    return `${root}/oauth`;
+  }
+  return root;
 }
 
 function redirectToApp(res: any, redirectUri: string, provider: string, status: string) {
@@ -250,7 +257,7 @@ export const oauth = onRequest(
           redirectUri,
         });
 
-        const callbackUrl = `${getFunctionBaseUrl(req)}/github/callback`;
+        const callbackUrl = `${getOAuthPublicBaseUrl(req)}/github/callback`;
         const authorize = new URL('https://github.com/login/oauth/authorize');
         authorize.searchParams.set('client_id', GITHUB_CLIENT_ID.value());
         authorize.searchParams.set('redirect_uri', callbackUrl);
@@ -265,7 +272,19 @@ export const oauth = onRequest(
         const code = String(req.query.code ?? '');
         const state = String(req.query.state ?? '');
         if (!code || !state) {
-          res.status(400).send('missing code/state');
+          res
+            .status(200)
+            .send(
+              [
+                'GitHub OAuth callback endpoint',
+                '',
+                'このURLは GitHub が認可後にリダイレクトして呼び出すためのものです。',
+                'ブラウザで直接開くと code/state が無いので処理できません。',
+                '',
+                'GitHub OAuth App の Authorization callback URL には次を登録してください:',
+                `${getOAuthPublicBaseUrl(req)}/github/callback`,
+              ].join('\n'),
+            );
           return;
         }
 
@@ -345,7 +364,7 @@ export const oauth = onRequest(
           codeVerifier,
         });
 
-        const callbackUrl = `${getFunctionBaseUrl(req)}/x/callback`;
+        const callbackUrl = `${getOAuthPublicBaseUrl(req)}/x/callback`;
 
         const authorize = new URL('https://twitter.com/i/oauth2/authorize');
         authorize.searchParams.set('response_type', 'code');
@@ -367,14 +386,26 @@ export const oauth = onRequest(
         const code = String(req.query.code ?? '');
         const state = String(req.query.state ?? '');
         if (!code || !state) {
-          res.status(400).send('missing code/state');
+          res
+            .status(200)
+            .send(
+              [
+                'X OAuth callback endpoint',
+                '',
+                'このURLは X が認可後にリダイレクトして呼び出すためのものです。',
+                'ブラウザで直接開くと code/state が無いので処理できません。',
+                '',
+                'X Developer Portal の Callback/Redirect URL には次を登録してください:',
+                `${getOAuthPublicBaseUrl(req)}/x/callback`,
+              ].join('\n'),
+            );
           return;
         }
 
         const stateDoc = await consumeOAuthState(state);
         if (stateDoc.provider !== 'x') throw new Error('provider mismatch');
 
-        const callbackUrl = `${getFunctionBaseUrl(req)}/x/callback`;
+        const callbackUrl = `${getOAuthPublicBaseUrl(req)}/x/callback`;
 
         const tokenRes = await (globalThis.fetch as any)(
           'https://api.twitter.com/2/oauth2/token',
